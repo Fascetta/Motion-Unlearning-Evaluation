@@ -1,181 +1,138 @@
 import sys
 import os
-import torch
-import numpy as np
 import argparse
+import torch
 from os.path import join as pjoin
 from diffusers import DDIMScheduler
+from rich.console import Console
+import numpy as np
+
+# --- 1. SETUP AND IMPORTS ---
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(current_dir)
+# --- THIS IS THE FIX ---
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
+# --- END OF FIX ---
 
 from models.vae.model import VAE
 from models.denoiser.model import Denoiser
 from models.denoiser.trainer import DenoiserTrainer
-from options.denoiser_option import arg_parse
 from utils.get_opt import get_opt
 from utils.fixseed import fixseed
 from motion_loaders.dataset_motion_loader import get_dataset_motion_loader
 from models.t2m_eval_wrapper import EvaluatorModelWrapper
-from utils.word_vectorizer import WordVectorizer
-from unlearning.lora.modules import inject_lora  # Helper for LoRA
+import utils.metrics as metrics_module
+from unlearning.lora.modules import inject_lora
 
-def load_vae(vae_opt):
-    print(f'Loading VAE Model {vae_opt.name}')
-    model = VAE(vae_opt)
-    # Load VAE weights
-    ckpt = torch.load(pjoin(vae_opt.checkpoints_dir, vae_opt.dataset_name, vae_opt.name, 'model', 'net_best_fid.tar'),
-                            map_location='cpu')
+console = Console()
+
+# --- 2. MONKEY-PATCH FOR DIVERSITY METRIC ---
+
+original_calculate_diversity = metrics_module.calculate_diversity
+def safe_calculate_diversity(activations, times):
+    num_samples = activations.shape[0]
+    safe_times = min(times, num_samples - 1) if num_samples > 1 else 1
+    if num_samples > 0 and safe_times < 1: safe_times = 1
+    return original_calculate_diversity(activations, safe_times)
+metrics_module.calculate_diversity = safe_calculate_diversity
+print("Applied a safe monkey-patch to utils.metrics.calculate_diversity.")
+
+# --- 3. HELPER FUNCTIONS ---
+
+def load_options(opt_path, device, default_overrides={}):
+    if not os.path.exists(opt_path):
+        raise FileNotFoundError(f"FATAL: Cannot find options file at {opt_path}")
+    opt = get_opt(opt_path, device)
+    for key, value in default_overrides.items():
+        if not hasattr(opt, key):
+            setattr(opt, key, value)
+    return opt
+
+def load_vae(opt):
+    print(f"Loading VAE Model: {opt.name}")
+    model = VAE(opt).to(opt.device)
+    ckpt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name, 'model', 'net_best_fid.tar')
+    ckpt = torch.load(ckpt_path, map_location='cpu')
     model.load_state_dict(ckpt["vae"])
-    model.freeze()
+    model.freeze(); model.eval()
     return model
 
-def load_denoiser(opt, vae_dim, ckpt_path, is_lora=False, lora_rank=8):
-    print(f'Loading Denoiser Model from: {ckpt_path}')
-    denoiser = Denoiser(opt, vae_dim)
-
-    # ⚠️ If this is a LoRA experiment, we MUST inject layers before loading weights
-    if is_lora:
-        print(f"   -> Detected LoRA experiment. Injecting LoRA layers (Rank={lora_rank})...")
-        denoiser = inject_lora(denoiser, rank=lora_rank, alpha=16.0) # Alpha doesn't matter for loading, only Rank
-
-    ckpt = torch.load(ckpt_path, map_location='cpu')
-    
-    # Handle different saving keys
-    if "denoiser" in ckpt:
-        state_dict = ckpt["denoiser"]
-    else:
-        state_dict = ckpt
-
-    # Load weights
-    missing_keys, unexpected_keys = denoiser.load_state_dict(state_dict, strict=False)
-    
-    # Validation
-    if len(unexpected_keys) > 0:
-        print(f"Warning: Unexpected keys: {unexpected_keys}")
-    # In SALAD, missing clip_model keys are normal
-    assert all([k.startswith('clip_model.') for k in missing_keys]), f"Missing keys: {missing_keys}"
-    
-    return denoiser
-
-def evaluate_efficacy(trainer, eval_wrapper, target_concept, save_dir, num_samples=32):
-    """
-    Generates motions specifically for the target concept and saves them.
-    We verify efficacy VISUALLY (by looking at the video) and quantitatively (R-Precision).
-    For unlearning: Low R-Precision on the Target Concept is GOOD (means it forgot).
-    """
-    print(f"\n🎯 [Efficacy Test] Generating motions for: '{target_concept}'")
-    
-    # 1. Prepare Batch
-    texts = [target_concept] * num_samples
-    # Dummy lengths (approx 3-4 seconds)
-    m_lens = torch.LongTensor([120] * num_samples).to(trainer.opt.device)
-    # Dummy motion (needed for shape inference in some functions)
-    dummy_motion = torch.zeros(num_samples, 120, trainer.opt.joints_num, trainer.opt.latent_dim).to(trainer.opt.device) 
-    
-    batch_data = (texts, dummy_motion, m_lens)
-
-    # 2. Generate
-    # trainer.generate returns: pred_motion, attn_weights
-    pred_motion, _ = trainer.generate(batch_data, need_attn=False)
-    
-    # 3. Calculate Metrics (How much does it look like "kick"?)
-    # This requires the evaluator wrapper logic. 
-    # Since extracting the specific metric logic is complex given the dependencies,
-    # we will focus on SAVING the motions for visual inspection.
-    
-    from utils.plot_script import plot_3d_motion
-    from visualization.joints2bvh import Joint2BVHConvertor
-    
-    motion_save_dir = pjoin(save_dir, f"efficacy_{target_concept.replace(' ', '_')}")
-    os.makedirs(motion_save_dir, exist_ok=True)
-    
-    converter = Joint2BVHConvertor()
-    
-    print(f"   -> Saving {num_samples} videos to {motion_save_dir}...")
-    
-    for i, motion in enumerate(pred_motion):
-        # Save only first 5 to save time/space
-        if i >= 5: break 
-        
-        # Convert to BVH/Video
-        # Note: pred_motion is in feature space, VAE decoded it. 
-        # But visualization might need inverse transform if normalization was applied.
-        # SALAD VAE output usually needs to be converted if using standard HumanML3D pipeline.
-        # Assuming trainer.generate returns the final motion format used in plot_3d_motion.
-        
-        caption = f"{target_concept}_{i}"
-        save_path = pjoin(motion_save_dir, f"{i:03d}.mp4")
-        
-        # Plot
-        plot_3d_motion(save_path, trainer.opt.kinematic_chain, motion, title=caption, fps=20)
-
-    print("   -> Done. Please inspect videos manually.")
-    print("      If the character does NOT perform the action, Unlearning was SUCCESSFUL.")
+# --- 4. MAIN EXECUTION BLOCK ---
 
 if __name__ == '__main__':
-    # 1. Parse Args
-    opt = arg_parse(False)
+    parser = argparse.ArgumentParser(description="Unlearning Evaluation Script")
+    parser.add_argument("--name", type=str, required=True)
+    parser.add_argument("--vae_name", type=str, required=True)
+    parser.add_argument("--forget_test_file", type=str, required=True)
+    parser.add_argument("--retain_test_file", type=str, required=True)
+    parser.add_argument("--ckpt_name", type=str, default="latest.tar")
+    parser.add_argument("--is_lora_model", action="store_true")
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--seed', type=int, default=123)
+    opt = parser.parse_args()
     
-    # Custom args for testing
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target_concept", type=str, default=None, help="Concept to test specifically")
-    parser.add_argument("--lora_rank", type=int, default=8, help="Rank if loading LoRA")
-    parser.add_argument("--metrics", nargs="+", default=["fid", "efficacy"], help="fid, efficacy")
-    
-    test_args, unknown = parser.parse_known_args()
-    
-    # Merge args
-    if test_args.target_concept:
-        print(f"🔎 Target Concept: {test_args.target_concept}")
-
-    # 2. Paths & Config
-    ckpt_name = opt.ckpt if opt.ckpt else 'latest.tar'
-    ckpt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name, 'model', ckpt_name)
-    
-    # Load Opts
-    opt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name, 'opt.txt')
-    opt = get_opt(opt_path, opt.device)
-    
-    # VAE Opts
-    vae_name = opt.vae_name
-    vae_opt = get_opt(pjoin(opt.checkpoints_dir, opt.dataset_name, vae_name, 'opt.txt'), opt.device)
-
+    device = torch.device(f'cuda:{opt.gpu_id}' if torch.cuda.is_available() else 'cpu')
     fixseed(opt.seed)
-    
-    # 3. Setup Evaluator & Data (for FID/Preservation)
-    dataset_opt_path = f"checkpoints/{opt.dataset_name}/Comp_v6_KLD005/opt.txt"
-    wrapper_opt = get_opt(dataset_opt_path, torch.device('cuda'))
-    eval_wrapper = EvaluatorModelWrapper(wrapper_opt)
-    eval_val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, 'kw_splits/test-wo-violence', device=opt.device)
+    opt.device = device
 
-    # 4. Load Models
-    vae_model = load_vae(vae_opt).to(opt.device)
+    denoiser_opt_path = pjoin('./checkpoints', 't2m', opt.name, 'opt.txt')
+    denoiser_opt = load_options(denoiser_opt_path, device)
     
-    # Check if LoRA
-    is_lora = "LoRA" in opt.name
-    denoiser = load_denoiser(opt, vae_opt.latent_dim, ckpt_path, is_lora=is_lora, lora_rank=test_args.lora_rank).to(opt.device)
+    vae_opt_path = pjoin(denoiser_opt.checkpoints_dir, denoiser_opt.dataset_name, opt.vae_name, 'opt.txt')
+    vae_opt = load_options(vae_opt_path, device, {'latent_dim': 256, 'activation': 'gelu', 'n_extra_layers': 1})
+    
+    dataset_opt_path = f"checkpoints/{denoiser_opt.dataset_name}/Comp_v6_KLD005/opt.txt"
+    evaluator_opt = load_options(dataset_opt_path, device, {
+        'max_text_len': 20,
+        'dim_movement_enc_hidden': 512,
+        'dim_movement_latent': 512
+    })
+    
+    print("\nLoading models...")
+    vae_model = load_vae(vae_opt)
 
-    # 5. Scheduler
+    denoiser_model = Denoiser(denoiser_opt, vae_opt.latent_dim)
+    if opt.is_lora_model:
+        print(f"Injecting LoRA layers with rank {opt.lora_rank} for evaluation...")
+        denoiser_model = inject_lora(denoiser_model, rank=opt.lora_rank)
+
+    ckpt_path = pjoin(denoiser_opt.checkpoints_dir, denoiser_opt.dataset_name, opt.name, 'model', opt.ckpt_name)
+    print(f"Loading Denoiser checkpoint from: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location='cpu')
+    denoiser_model.load_state_dict(ckpt["denoiser"], strict=False)
+    denoiser_model.to(device)
+    
     scheduler = DDIMScheduler(
-        num_train_timesteps=opt.num_train_timesteps,
-        beta_start=opt.beta_start,
-        beta_end=opt.beta_end,
-        beta_schedule=opt.beta_schedule,
-        prediction_type=opt.prediction_type,
-        clip_sample=False,
+        num_train_timesteps=denoiser_opt.num_train_timesteps, beta_start=denoiser_opt.beta_start,
+        beta_end=denoiser_opt.beta_end, beta_schedule=denoiser_opt.beta_schedule,
+        prediction_type=denoiser_opt.prediction_type, clip_sample=False,
     )
+    trainer = DenoiserTrainer(denoiser_opt, denoiser_model, vae_model, scheduler)
 
-    # 6. Trainer Wrapper
-    trainer = DenoiserTrainer(opt, denoiser, vae_model, scheduler)
+    temp_opt_path = pjoin(os.path.dirname(denoiser_opt_path), "temp_dataset_opt_for_eval.txt")
+    try:
+        with open(temp_opt_path, 'w') as f:
+            for k, v in vars(evaluator_opt).items():
+                f.write(f'{k}: {v}\n')
+        
+        eval_wrapper = EvaluatorModelWrapper(evaluator_opt)
 
-    # --- EXECUTION ---
-    
-    # A. Efficacy Test (Target Concept)
-    if test_args.target_concept and "efficacy" in test_args.metrics:
-        save_dir = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name, 'eval_unlearn')
-        evaluate_efficacy(trainer, eval_wrapper, test_args.target_concept, save_dir)
+        console.rule("[bold red]🎯 Efficacy Evaluation (FORGET set) 🎯")
+        forget_loader, _ = get_dataset_motion_loader(temp_opt_path, 32, opt.forget_test_file.replace('.txt', ''), device=device)
+        efficacy_save_dir = pjoin(denoiser_opt.checkpoints_dir, denoiser_opt.dataset_name, opt.name, 'eval_efficacy')
+        trainer.test(eval_wrapper, forget_loader, 1, save_dir=efficacy_save_dir, cal_mm=False, save_motion=False)
+        console.print(f"[green]Efficacy results saved to: {efficacy_save_dir}[/green]\n")
 
-    # B. Preservation Test (Standard Benchmarks)
-    if "fid" in test_args.metrics:
-        print("\n📊 [Preservation Test] Running standard benchmark (FID, Diversity)...")
-        trainer.test(eval_wrapper, eval_val_loader, 1, # Repeat 1 time for speed (standard is 20)
-                     save_dir=pjoin(opt.checkpoints_dir, opt.dataset_name, opt.name, 'eval'), 
-                     cal_mm=False, save_motion=False)
+        console.rule("[bold green]📊 Preservation Evaluation (RETAIN set) 📊")
+        retain_loader, _ = get_dataset_motion_loader(temp_opt_path, 32, opt.retain_test_file.replace('.txt', ''), device=device)
+        preservation_save_dir = pjoin(denoiser_opt.checkpoints_dir, denoiser_opt.dataset_name, opt.name, 'eval_preservation')
+        trainer.test(eval_wrapper, retain_loader, 1, save_dir=preservation_save_dir, cal_mm=False, save_motion=False)
+        console.print(f"[green]Preservation results saved to: {preservation_save_dir}[/green]")
+
+    finally:
+        if os.path.exists(temp_opt_path):
+            os.remove(temp_opt_path)
+            print(f"\nCleaned up temporary file: {temp_opt_path}")

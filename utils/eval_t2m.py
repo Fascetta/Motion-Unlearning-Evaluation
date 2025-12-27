@@ -305,8 +305,16 @@ def evaluation_denoiser(out_dir, val_loader, denoiser, gen_func, writer, ep,
     gt_mu, gt_cov = calculate_activation_statistics(motion_annotation_np)
     mu, cov = calculate_activation_statistics(motion_pred_np)
 
-    diversity_real = calculate_diversity(motion_annotation_np, 300 if nb_sample > 300 else 100)
-    diversity = calculate_diversity(motion_pred_np, 300 if nb_sample > 300 else 100)
+    # --- PASTE THIS CORRECTED CODE ---
+    # This fix prevents the AssertionError by ensuring 'diversity_times' is safe for small datasets.
+    safe_diversity_times = 1
+    if nb_sample > 1:
+        # Set times to be, at most, one less than the number of samples.
+        safe_diversity_times = min(100, nb_sample - 1)
+
+    diversity_real = calculate_diversity(motion_annotation_np, safe_diversity_times)
+    diversity = calculate_diversity(motion_pred_np, safe_diversity_times)
+    # --- END OF FIX ---
 
     R_precision_real = R_precision_real / nb_sample
     R_precision = R_precision / nb_sample
@@ -447,8 +455,16 @@ def test_denoiser(val_loader, gen_func, repeat_id, eval_wrapper, num_joint, cal_
     gt_mu, gt_cov = calculate_activation_statistics(motion_annotation_np)
     mu, cov = calculate_activation_statistics(motion_pred_np)
 
-    diversity_real = calculate_diversity(motion_annotation_np, 300 if nb_sample > 300 else 100)
-    diversity = calculate_diversity(motion_pred_np, 300 if nb_sample > 300 else 100)
+    # --- PASTE THIS CORRECTED CODE ---
+    # This fix prevents the AssertionError by ensuring 'diversity_times' is safe for small datasets.
+    safe_diversity_times = 1
+    if nb_sample > 1:
+        # Set times to be, at most, one less than the number of samples.
+        safe_diversity_times = min(100, nb_sample - 1)
+
+    diversity_real = calculate_diversity(motion_annotation_np, safe_diversity_times)
+    diversity = calculate_diversity(motion_pred_np, safe_diversity_times)
+    # --- END OF FIX ---
 
     R_precision_real = R_precision_real / nb_sample
     R_precision = R_precision / nb_sample

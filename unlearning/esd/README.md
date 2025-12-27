@@ -99,3 +99,21 @@ Compare the output from Step 1 and Step 2. A successful unlearning experiment wi
 
 ## 📚 References
 Based on the paper: **"Erasing Concepts from Diffusion Models"** (Gandikota et al., 2023).
+
+
+
+
+
+
+
+
+
+python unlearning/esd/train.py \
+  --name t2m_denoiser_vpred_vaegelu \
+  --target_concept "kick" \
+  --forget_split_file "kw_splits/train_val-w-kick" \
+  --preserve_split_file "train" \
+  --unlearn_epochs 3 \
+  --unlearn_lr 1e-5 \
+  --negative_guidance 7.0 \
+  --preservation_weight 0.1
