@@ -70,32 +70,39 @@ def get_concept_embeddings(denoiser, texts, device):
 
 def apply_uce(denoiser, target_emb, neutral_emb, logger, lambda_param=0.1):
     """
-    Applies Closed-Form UCE update to all Cross-Attention layers.
+    Applies Closed-Form UCE update to all Cross-Attention layers by finding all
+    STTransformerLayer modules. This is robust to architecture changes.
     """
     logger.info("Applying UCE with lambda=%.2f...", lambda_param)
     
-    all_blocks = []
-    all_blocks.extend([b for b in denoiser.transformer.input_blocks])
-    all_blocks.append(denoiser.transformer.middle_block)
-    all_blocks.extend([b for b in denoiser.transformer.output_blocks])
+    # --- FINAL, ROBUST FIX: Find all STTransformerLayer modules dynamically ---
+    all_st_transformer_blocks = []
+    for module in denoiser.transformer.modules():
+        # The class name is STTransformerLayer in transformer.py
+        if module.__class__.__name__ == "STTransformerLayer":
+            all_st_transformer_blocks.append(module)
     
+    if not all_st_transformer_blocks:
+        logger.error("Could not find any STTransformerLayer blocks in the denoiser.transformer!")
+        raise ValueError("Architecture mismatch or error in finding transformer blocks.")
+
     c_target = target_emb.mean(dim=1).squeeze(0) 
     c_neutral = neutral_emb.mean(dim=1).squeeze(0)
     
     count = 0
-    for block in all_blocks:
-        ca_module = block.cross_attn
-        
-        W_v = ca_module.Wv.weight.data
-        
-        # Calculate Delta
-        diff = torch.mv(W_v, c_target - c_neutral) # [D]
-        correction = torch.outer(diff, c_target)
-        norm_factor = torch.dot(c_target, c_target)
-        
-        # Update W_v
-        ca_module.Wv.weight.data -= lambda_param * (correction / (norm_factor + 1e-6))
-        count += 1
+    # Iterate through the dynamically found blocks
+    for block in all_st_transformer_blocks:
+        if hasattr(block, 'cross_attn'):
+            ca_module = block.cross_attn
+            
+            W_v = ca_module.Wv.weight.data
+            
+            diff = torch.mv(W_v, c_target - c_neutral)
+            correction = torch.outer(diff, c_target)
+            norm_factor = torch.dot(c_target, c_target)
+            
+            ca_module.Wv.weight.data -= lambda_param * (correction / (norm_factor + 1e-6))
+            count += 1
         
     logger.info("✅ Edited %d Cross-Attention layers.", count)
     return denoiser

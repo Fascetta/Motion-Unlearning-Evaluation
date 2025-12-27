@@ -163,6 +163,15 @@ if __name__ == "__main__":
 
     os.makedirs(opt_base.model_dir, exist_ok=True)
     os.makedirs(opt_base.eval_dir, exist_ok=True)
+    
+    args_to_save = vars(opt_base)
+    logger.info(f"Saving options to {pjoin(opt_base.checkpoints_dir, opt_base.dataset_name, NEW_EXP_NAME, 'opt.txt')}")
+    args_to_save = vars(opt_base)
+    with open(pjoin(opt_base.checkpoints_dir, opt_base.dataset_name, NEW_EXP_NAME, "opt.txt"), 'w') as f:
+        for k, v in args_to_save.items():
+            # Do not add extra quotes
+            f.write(f'{k}: {v}\n')
+    
 
     fixseed(opt.seed)
 

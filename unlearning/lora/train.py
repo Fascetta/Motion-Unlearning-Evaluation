@@ -99,6 +99,14 @@ if __name__ == '__main__':
     opt_base.eval_dir = eval_dir
     os.makedirs(model_dir, exist_ok=True)
     
+    opt_base.dataset_name = opt.dataset_name 
+    logger.info(f"Saving options to {pjoin(opt_base.checkpoints_dir, opt_base.dataset_name, NEW_EXP_NAME, 'opt.txt')}")
+    args_to_save = vars(opt_base)
+    with open(pjoin(opt_base.checkpoints_dir, opt_base.dataset_name, NEW_EXP_NAME, "opt.txt"), 'w') as f:
+        for k, v in args_to_save.items():
+            # Do not add extra quotes
+            f.write(f'{k}: {v}\n')
+    
     fixseed(opt.seed)
 
     logger.info("Loading Datasets...")
@@ -110,6 +118,12 @@ if __name__ == '__main__':
     
     vae = load_vae(vae_opt, logger).to(opt.device)
     denoiser = load_denoiser(opt, vae_opt.latent_dim, logger, 'net_best_fid.tar').to(opt.device)
+
+    # --- FIX: Freeze the entire base model BEFORE injecting LoRA ---
+    logger.info("Freezing all parameters of the base denoiser model.")
+    for param in denoiser.parameters():
+        param.requires_grad = False
+    # -----------------------------------------------------------------
 
     denoiser = inject_lora(denoiser, rank=lora_args.lora_rank, alpha=lora_args.lora_alpha)
     denoiser.to(opt.device)

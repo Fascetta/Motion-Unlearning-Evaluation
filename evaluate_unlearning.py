@@ -9,25 +9,24 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-# --- Optimizations ---
-torch.backends.cudnn.benchmark = True
-
+# --- Custom Imports from your project ---
 from diffusers import DDIMScheduler
 from data.t2m_dataset import MotionDataset
 from models.denoiser.model import Denoiser
 from models.denoiser.trainer import DenoiserTrainer
 from models.t2m_eval_wrapper import EvaluatorModelWrapper
-from utils.word_vectorizer import WordVectorizer
 from models.vae.model import VAE
 from motion_loaders.dataset_motion_loader import get_dataset_motion_loader
 from utils.eval_t2m import test_denoiser
 from utils.fixseed import fixseed
-from utils.metrics import euclidean_distance_matrix
 from utils.get_opt import get_opt
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
+from utils.word_vectorizer import WordVectorizer
+from utils.metrics import euclidean_distance_matrix
 
-# (Keep the setup_logging, plot_generated_motions, run_evaluation, and evaluate_concept functions exactly as they were in the last version)
+# --- Optimizations ---
+torch.backends.cudnn.benchmark = True
 
 # --- Setup Logging ---
 console = Console(theme=Theme({"info": "dim cyan", "warning": "magenta", "error": "bold red"}))
@@ -97,14 +96,21 @@ def run_evaluation(logger, model_name, ckpt_name, is_unlearned=False, args_overr
     mean = np.load(pjoin(wrapper_opt.meta_dir, "mean.npy"))
     std = np.load(pjoin(wrapper_opt.meta_dir, "std.npy"))
     opt.window_size = 196
-    # Access kinematic_chain from the wrapper's opt object, which is more reliable.
     dummy_dataset = MotionDataset(opt, mean, std, pjoin(opt.data_root, "kw_splits/train-wo-violence.txt"))
+
+    # --- CHANGE: Fast Evaluation Mode ---
+    if args_override.fast_eval:
+        logger.warning("--- RUNNING IN FAST EVALUATION MODE ---")
+        split_name = "kw_splits/test-wo-violence-fast"
+        opt.num_inference_timesteps = 20 # Drastically reduce sampling steps
+    else:
+        split_name = "kw_splits/test-wo-violence"
 
     scheduler = DDIMScheduler(num_train_timesteps=opt.num_train_timesteps, beta_start=opt.beta_start, beta_end=opt.beta_end, prediction_type=opt.prediction_type, clip_sample=False)
     trainer = DenoiserTrainer(opt, denoiser, vae, scheduler)
     
     console.rule("[bold green]📊 PART A: PRESERVATION (Standard Test Set)")
-    val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, "kw_splits/test-wo-violence", device=args_override.device, num_workers=0)
+    val_loader, _ = get_dataset_motion_loader(dataset_opt_path, 32, split_name, device=args_override.device, num_workers=0) # --- CHANGE: Use split_name ---
     
     _, fid, diversity, r_precision, matching_score, _, _, _, _ = test_denoiser(val_loader, trainer.generate, 0, eval_wrapper, opt.joints_num, cal_mm=False)
 
@@ -121,72 +127,64 @@ def run_evaluation(logger, model_name, ckpt_name, is_unlearned=False, args_overr
         evaluate_concept(logger, trainer, eval_wrapper, dummy_dataset, opt, concept, eval_output_dir, wrapper_opt)
 
 def evaluate_concept(logger, trainer, wrapper, dataset, opt, concept, output_dir, wrapper_opt):
-    """Generates motions for a concept, calculates metrics, and saves videos."""
     logger.info(f"--- Evaluating concept: '{concept}' ---")
     num_samples = 32
     texts = [concept] * num_samples
     m_lens = torch.LongTensor([100] * num_samples).to(opt.device)
 
-    # Generate motion
     with torch.no_grad():
         dummy_motion = torch.zeros(num_samples, 196, opt.dim_pose).to(opt.device)
         pred_motions_features, _ = trainer.generate((texts, dummy_motion, m_lens))
 
-    # --- METRIC CALCULATION FIX ---
-    # The wrapper does not have 'get_sync_metrics'. We must compute embeddings manually.
+    motion_embeddings = wrapper.get_motion_embeddings(motions=pred_motions_features, m_lens=m_lens)
 
-    # 1. Get motion embeddings for the generated motions
-    # The wrapper expects motions with shape (batch_size, frames, num_features)
-    # and lengths as a tensor.
-    motion_embeddings = wrapper.get_motion_embeddings(
-        motions=pred_motions_features,
-        m_lens=m_lens
-    )
-
-    # 2. Get text embeddings for the prompts
-    # This requires creating word embeddings and pos_one_hots, similar to the dataset loader.
     w_vectorizer = WordVectorizer('./glove', 'our_vab')
-    text_embeddings_list = []
+    pos_tag_map = {'a': 'DET', 'the': 'DET', 'an': 'DET', 'person': 'NOUN', 'man': 'NOUN', 'woman': 'NOUN', 'character': 'NOUN', 'kicking': 'VERB', 'jumping': 'VERB', 'punching': 'VERB', 'lunging': 'VERB', 'walking': 'VERB', 'running': 'VERB'}
+    all_word_embs, all_pos_ohots, all_cap_lens = [], [], []
+
     for text in texts:
-        tokens = text.split(' ')
-        tokens = ['sos/OTHER'] + tokens + ['eos/OTHER']
-        word_emb, pos_oh = w_vectorizer[tokens]
-        text_embeddings_list.append(word_emb[None, :, :]) # Add batch dimension
+        raw_tokens = text.split(' ')
+        tokens_with_pos = [f"{word}/{pos_tag_map.get(word, 'NOUN')}" for word in raw_tokens]
+        tokens = ['sos/OTHER'] + tokens_with_pos + ['eos/OTHER']
+        
+        sent_len = len(tokens)
+        if len(tokens) < wrapper_opt.max_text_len + 2:
+            tokens = tokens + ['unk/OTHER'] * (wrapper_opt.max_text_len + 2 - len(tokens))
 
-    text_embeddings = torch.from_numpy(np.concatenate(text_embeddings_list, axis=0)).float().to(opt.device)
-    
-    # The text encoder in the wrapper expects word_embeddings, pos_one_hots, and lengths.
-    # We can pass dummy values for pos_one_hots and use the length of our text embeddings.
-    cap_lens = torch.LongTensor([text_embeddings.shape[1]] * num_samples).to(opt.device)
-    dummy_pos = torch.zeros(num_samples, text_embeddings.shape[1], 45).to(opt.device) # 45 is pos_ohot dim
-    
-    text_embeddings = wrapper.text_encoder(text_embeddings, dummy_pos, cap_lens)
+        all_cap_lens.append(sent_len)
+        word_embeddings, pos_one_hots = [], []
+        for token in tokens:
+            word_emb, pos_oh = w_vectorizer[token]
+            word_embeddings.append(word_emb[None, :])
+            pos_one_hots.append(pos_oh[None, :])
+        all_word_embs.append(np.concatenate(word_embeddings, axis=0)[None, :, :])
+        all_pos_ohots.append(np.concatenate(pos_one_hots, axis=0)[None, :, :])
 
-    # 3. Calculate Matching Score
-    # We use the euclidean distance, the same way test_denoiser does.
-    dist_matrix = euclidean_distance_matrix(text_embeddings.cpu().numpy(), motion_embeddings.cpu().numpy())
-    matching_score = dist_matrix.trace() / len(texts) # Average score per sample
+    word_embs_batch = torch.from_numpy(np.concatenate(all_word_embs, axis=0)).float().to(opt.device)
+    pos_ohots_batch = torch.from_numpy(np.concatenate(all_pos_ohots, axis=0)).float().to(opt.device)
+    cap_lens_batch = torch.from_numpy(np.array(all_cap_lens)).long().to(opt.device)
 
+    text_embeddings = wrapper.text_encoder(word_embs_batch, pos_ohots_batch, cap_lens_batch)
+
+    dist_matrix = euclidean_distance_matrix(text_embeddings.cpu().detach().numpy(), motion_embeddings.cpu().detach().numpy())
+    matching_score = dist_matrix.trace() / len(texts)
     logger.info(f"Matching Score for '{concept}': {matching_score:.4f} (Lower is better for forgotten concepts)")
 
-    # Plot videos
     pred_motions_denorm = dataset.inv_transform(pred_motions_features.cpu().numpy())
-    plot_generated_motions(logger, pred_motions_denorm, opt, pjoin(output_dir, "videos"), concept.replace(" ", "_"), wrapper_opt.kinematic_chain)
-    
-# --- CORRECTED MAIN BLOCK ---
+    plot_generated_motions(logger, pred_motions_denorm, opt, pjoin(output_dir, "videos"), concept.replace(" ", "_"), opt.kinematic_chain)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # Arguments to define which models to compare
     parser.add_argument("--original_name", type=str, required=True, help="Folder name of the original pre-trained model.")
     parser.add_argument("--original_ckpt", type=str, default="net_best_fid.tar", help="Checkpoint file for the original model.")
     parser.add_argument("--unlearned_name", type=str, required=True, help="Folder name of the new unlearned model.")
     parser.add_argument("--unlearned_ckpt", type=str, default="latest.tar", help="Checkpoint file for the unlearned model.")
-    
-    # Arguments to define the evaluation itself
     parser.add_argument("--dataset_name", type=str, default="t2m", help="Dataset name.")
     parser.add_argument("--target_concept", type=str, required=True, help="Concept that was unlearned.")
     parser.add_argument("--related_concepts", nargs='+', required=True, help="List of related concepts for the specificity test.")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use.")
+    # --- CHANGE: Add fast_eval flag ---
+    parser.add_argument("--fast_eval", action="store_true", help="Run a fast evaluation on a small subset of data.")
     
     args = parser.parse_args()
     args.device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -194,7 +192,6 @@ if __name__ == "__main__":
 
     logger = setup_logging("logs/eval_logs", f"{args.unlearned_name}_comparison")
 
-    # 1. Evaluate the ORIGINAL model to get a baseline
     run_evaluation(
         logger=logger,
         model_name=args.original_name,
@@ -203,7 +200,6 @@ if __name__ == "__main__":
         args_override=args
     )
     
-    # 2. Evaluate the UNLEARNED model and compare
     run_evaluation(
         logger=logger,
         model_name=args.unlearned_name,
