@@ -1,7 +1,7 @@
 # Motion Unlearning: Evaluation on SALAD
 ### LoRA, ESD, and UCE for 3D Motion Unlearning
 
-This repository extends the official implementation of **[SALAD: Skeleton-Aware Latent Diffusion Model (CVPR 2025)](https://seokhyeonhong.github.io/projects/salad/)** to investigate **Machine Unlearning** in 3D motion generation.
+This repository extends the official implementation of **[SALAD: Skeleton-Aware Latent Diffusion Model for Text-driven Motion Generation and Editing](https://seokhyeonhong.github.io/projects/salad/)** to investigate **Machine Unlearning** in 3D motion generation.
 
 We provide a modular framework to **erase specific motion concepts** (e.g., "kick", "jump") by defining "forget" and "retain/preserve" datasets, while preserving the model's general generation capabilities.
 
@@ -107,18 +107,31 @@ salad
 │   └── uce/                    <-- UCE Implementation
 │       └── edit.py
 ├── test_unlearn.py             <-- Main Unlearning Evaluation Script
-├── kw_splits/                  <-- Data splits for forget/retain sets
-├── train_denoiser.py           <-- Original SALAD training
+├── dataset                     
+│   └── humanml3d
+|       └── kw_splits           <-- Data splits for forget/retain sets
 └── ...
 ```
 
 ## 📚 Citation
+If you find this repository useful, please cite the original SALAD paper and the work on Human Motion Unlearning:
+
 **SALAD (CVPR 2025):**
 ```bibtex
 @inproceedings{hong2025salad,
   title={SALAD: Skeleton-Aware Latent Diffusion Model for Text-driven Motion Generation and Editing},
   author={Hong, Seokhyeon and Kim, Chaelin and Yoon, Serin and Nam, Junghyun and Cha, Sihun and Noh, Junyong},
   booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year={2025}
+}
+```
+
+**Human Motion Unlearning (AAAI 2026):**
+```bibtex
+@article{de2025human,
+  title={Human Motion Unlearning},
+  author={De Matteis, Edoardo and Migliarini, Matteo and Sampieri, Alessio and Spinelli, Indro and Galasso, Fabio},
+  journal={arXiv preprint arXiv:2503.18674},
   year={2025}
 }
 ```
