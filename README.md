@@ -26,7 +26,6 @@ conda create -n salad-unlearn python=3.9 -y
 conda activate salad-unlearn
 pip install torch==1.13.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
 pip install -r requirements.txt
-pip install rich  # Required for improved logging
 ```
 
 ## 📖 Dataset & Weights
@@ -35,7 +34,8 @@ pip install rich  # Required for improved logging
     ```bash
     bash prepare/download_t2m.sh
     bash prepare/download_glove.sh
-    ```3.  **Keyword Splits:** Pre-generated data splits for concepts like "kick" are located in `kw_splits/`.
+    ```
+3.  **Keyword Splits:** Data splits for concepts like "kick" are generated following *De Matteis et al.* **Human Motion Unlearning**.
 
 ---
 
@@ -45,8 +45,8 @@ pip install rich  # Required for improved logging
 Destructive but robust. It creates a copy of the model and fine-tunes it using forget/preserve sets.
 ```bash
 python unlearning/esd/train.py \
-  --forget_split_file "kw_splits/train_val-w-kick.txt" \
-  --preserve_split_file "kw_splits/train_val-wo-kick.txt"
+  --forget_file "kw_splits/train_val-w-kick.txt" \
+  --preserve_file "kw_splits/train_val-wo-kick.txt"
 ```
 
 ### 2. LoRA (Adapters)

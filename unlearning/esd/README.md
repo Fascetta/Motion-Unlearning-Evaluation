@@ -42,12 +42,15 @@ The script creates a new experiment folder, preserving your original model weigh
 ```
 checkpoints/t2m/
 └── {ORIGINAL_NAME}_ESD_{TARGET_CONCEPT}/  <-- New Folder
-    ├── model/
-    │   ├── latest.tar      <-- Unlearned weights from the last epoch
-    │   └── net_e_XX.tar    <-- Weights from a specific epoch
+    ├── eval_efficacy/      <-- Folder for evaluation results on forget set
+    ├── eval_preservation/  <-- Folder for evaluation results on retain set
+    |
     ├── logs/
     │   └── train.log       <-- Full training logs
-    └── evaluation/         <-- Folder for evaluation results
+    |
+    ├── model/
+    │   └── latest.tar      <-- Unlearned weights from the last epoch
+    └── opt.txt
 ```
 
 ## ⏭️ Next Steps: Comprehensive Evaluation
@@ -55,16 +58,15 @@ checkpoints/t2m/
 A structured evaluation is necessary to ensure the unlearning process was successful. This involves verifying three key aspects:
 1.  **Efficacy:** Did the model successfully forget the target concept?
 2.  **Preservation:** Does the model still perform well on other, unrelated concepts?
-3.  **Specificity:** Did the model inadvertently forget related concepts?
 
-Our comprehensive evaluation script (`unlearning/esd/evaluate.py`) automates this by comparing the original and unlearned models.
+Our comprehensive evaluation script (`unlearning/test_unlearn.py`) automates this by comparing the original and unlearned models.
 
 ### Step 1: Evaluate the ORIGINAL Model (Establish a Baseline)
 
 First, evaluate your original, pre-trained model to establish a baseline performance.
 
 ```bash
-python test_unlearn.py  \
+python unlearning/test_unlearn.py  \
   --name "t2m_denoiser_vpred_vaegelu"  
   --forget_test_file "kw_splits/test-w-kick.txt"  \
   --retain_test_file "kw_splits/test-wo-kick.txt"
@@ -75,7 +77,7 @@ python test_unlearn.py  \
 Next, run the same evaluation, but point it to the new model folder and the unlearned checkpoint (`latest.tar` or a specific epoch's weights).
 
 ```bash
-python test_unlearn.py  \
+python unlearning/test_unlearn.py  \
   --name "t2m_denoiser_vpred_vaegelu_ESD_kick"  
   --forget_test_file "kw_splits/test-w-kick.txt"  \
   --retain_test_file "kw_splits/test-wo-kick.txt"
@@ -84,9 +86,8 @@ python test_unlearn.py  \
 ### Step 3: Interpret the Results
 
 Compare the results from both evaluations. A successful unlearning experiment should demonstrate:
-*   ✅ **Efficacy:** The **Matching Score** for the `--target_concept` is significantly **lower** for the unlearned model.
-*   ✅ **Preservation:** The **General FID**, **R-Precision**, and **Matching Score** on the standard test set are **very close** to the original model's scores.
-*   ✅ **Specificity:** The **Matching Scores** for the `--related_concepts` have **not decreased significantly**.
+*   ✅ **Efficacy:** An high FID on the forget set means that the model correctly forgot about the concept.
+*   ✅ **Preservation:** A low FID on the retain set means that the model has not been damaged by the unlearning procedure.
 
 ## 📚 References
 Based on the paper: **"Erasing Concepts from Diffusion Models"** (Gandikota et al., 2023).

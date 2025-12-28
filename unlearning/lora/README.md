@@ -52,11 +52,15 @@ The script generates a new experiment folder to store the unlearned model and lo
 ```
 checkpoints/t2m/
 └── {ORIGINAL_NAME}_LoRA_contrast_kick/
-    ├── model/
-    │   └── latest.tar      <-- State dict containing original weights + LoRA adapters
+    ├── eval_efficacy/      <-- Folder for evaluation results on forget set
+    ├── eval_preservation/  <-- Folder for evaluation results on retain set
+    |
     ├── logs/
     │   └── train_lora.log  <-- Full, detailed training logs
-    └── eval/               <-- Directory for evaluation results
+    |
+    ├── model/
+    │   └── latest.tar      <-- Unlearned weights from the last epoch
+    └── opt.txt
 ```
 
 ## ⏭️ Next Steps: Evaluation
@@ -64,10 +68,10 @@ checkpoints/t2m/
 To evaluate a LoRA-unlearned model, the testing script must be instructed to **inject the LoRA layers** before loading the checkpoint. This is done by providing the same rank used during training. The evaluation also uses corresponding "forget" and "retain" test sets.
 
 ```bash
-python test_unlearn.py \
-  python test_unlearn.py   \
+python unlearning/test_unlearn.py \
   --name "t2m_denoiser_vpred_vaegelu_LoRA_kick" \ 
   --forget_test_file "kw_splits/test-w-kick.txt"  \
-  --retain_test_file "kw_splits/test-wo-kick.txt"
+  --retain_test_file "kw_splits/test-wo-kick.txt" \
+  --is_lora
 ```
 **Note:** Ensure the `--lora_rank` argument here matches the value used during the training step.

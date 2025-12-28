@@ -221,12 +221,12 @@ def main():
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=float, default=16.0)
     parser.add_argument("--unlearn_lr", type=float, default=1e-4)
-    parser.add_argument("--unlearn_epochs", type=int, default=10)
+    parser.add_argument("--unlearn_epochs", type=int, default=2)
     parser.add_argument("--vae_name", type=str, default="t2m_vae_gelu")
     parser.add_argument(
         "--max_steps_per_epoch",
         type=int,
-        default=20,
+        default=5,
         help="Limit training steps per epoch for faster iteration.",
     )
 

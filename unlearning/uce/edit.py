@@ -145,7 +145,7 @@ if __name__ == "__main__":
         help="Path to text file with captions to RETAIN.",
     )
     parser.add_argument(
-        "--uce_lambda", type=float, default=1.0, help="Strength of the UCE edit."
+        "--uce_lambda", type=float, default=3.0, help="Strength of the UCE edit."
     )
     parser.add_argument(
         "--vae_name",

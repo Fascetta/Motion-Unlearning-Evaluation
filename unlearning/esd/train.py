@@ -113,13 +113,13 @@ if __name__ == "__main__":
         help="Weight for the preservation loss (lambda)",
     )
     parser.add_argument(
-        "--forget_split_file",
+        "--forget_file",
         type=str,
         required=True,
         help="Path to the split file for the concept to forget (kw_splits/train_val-w-kick.txt)",
     )
     parser.add_argument(
-        "--preserve_split_file",
+        "--preserve_file",
         type=str,
         required=True,
         help="Path to the split file for the data to preserve (kw_splits/train_val-wo-kick.txt)",
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     opt.weight_decay = 0.0
 
     concept_name = (
-        os.path.basename(unlearn_args.forget_split_file)
+        os.path.basename(unlearn_args.forget_file)
         .split(".")[0]
         .replace("train_val-w-", "")
     )
@@ -215,20 +215,20 @@ if __name__ == "__main__":
 
     main_logger.info("Using temporary patched dataset options from %s", temp_opt_path)
 
-    forget_split_name = unlearn_args.forget_split_file.replace(".txt", "")
-    preserve_split_name = unlearn_args.preserve_split_file.replace(".txt", "")
+    forget_name = unlearn_args.forget_file.replace(".txt", "")
+    preserve_name = unlearn_args.preserve_file.replace(".txt", "")
 
     forget_loader, _ = get_dataset_motion_loader(
         temp_opt_path,
         opt.batch_size,
-        forget_split_name,
+        forget_name,
         device=opt.device,
         num_workers=opt.num_workers,
     )
     preserve_loader, _ = get_dataset_motion_loader(
         temp_opt_path,
         opt.batch_size,
-        preserve_split_name,
+        preserve_name,
         device=opt.device,
         num_workers=opt.num_workers,
     )

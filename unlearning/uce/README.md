@@ -32,7 +32,7 @@ python unlearning/uce/edit.py \
 | :--- | :--- |
 | `--forget_file` | **Required.** Path to a text file with captions describing the motions to FORGET. |
 | `--retain_file` | **Required.** Path to a text file with captions describing motions to RETAIN. |
-| `--uce_lambda` | The strength of the edit. `1.0` fully projects the forget concept onto the retain concept. Higher values can "invert" the concept. Default: `1.0`. |
+| `--uce_lambda` | The strength of the edit. `1.0` fully projects the forget concept onto the retain concept. Higher values can "invert" the concept. Default: `3.0`. |
 | `--name` | The name of the original pre-trained model directory. |
 
 ## 📂 Output & Logging
@@ -50,16 +50,6 @@ checkpoints/t2m/
     └── opt.txt             <-- A copy of the original model's configuration
 ```
 
-## 📊 Comparison: UCE vs ESD vs LoRA
-
-| Feature | ESD (Fine-tuning) | LoRA (Adapters) | UCE (Editing) |
-| :--- | :--- | :--- | :--- |
-| **Speed** | Slow (~30-60 mins) | Medium (~20 mins) | **Instant** (< 1 min) |
-| **Method** | Optimization (Loss) | Optimization (Loss) | Linear Algebra (Closed-form) |
-| **Type** | Destructive | Additive (Weights frozen) | Destructive |
-| **Efficacy** | Very High | High | High |
-| **Preservation**| Can drift | Excellent | Very Good |
-
 ## ⏭️ Next Steps: Evaluation
 
 Verify the success of the erasure by running the evaluation script on the new model, using corresponding test sets.
@@ -73,4 +63,6 @@ python test_unlearn.py \
 
 ## 📚 References
 
-Based on the paper: **"Editing Large Language Models: A Closed-form Solution" (Unofficial)** and its principles, adapted for motion. The K/V editing technique is inspired by the official UCE paper: **"Unified Concept Editing for Diffusion Models"** (Gandikota et al., 2024).
+Based on the paper: **"Editing Large Language Models: A Closed-form Solution" (Unofficial)** and its principles, adapted for motion.
+
+The K/V editing technique is inspired by the official UCE paper: **"Unified Concept Editing for Diffusion Models"** (Gandikota et al., 2024).
