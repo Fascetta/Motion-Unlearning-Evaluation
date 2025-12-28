@@ -1,69 +1,69 @@
-# Erasing Stable Diffusion (ESD) for Motion
+# Erasing Stable Diffusion (ESD) for 3D Motion
 
-This project implements **ESD (Erasing Stable Diffusion)**, a fine-tuning technique adapted for 3D Motion Generation. ESD modifies a pre-trained model to "forget" a specific concept by guiding its predictions away from the target concept and towards a neutral or unconditional output. This is particularly useful for removing undesirable or copyrighted motions from a generative model without having to retrain it from scratch.
+This project implements **Erasing Stable Diffusion (ESD)**, a pioneering fine-tuning technique adapted for 3D Motion Generation. ESD surgically removes concepts from a pre-trained generative model, offering a powerful solution for eliminating undesirable, copyrighted, or unsafe motions without the need for full retraining.
+
+This method is a key approach in the rapidly evolving field of machine unlearning. It modifies the model's weights directly, making the erasure robust and difficult to circumvent—a critical feature for deploying safe and ethical generative models.
 
 ## 🧠 How it Works
 
-Unlike standard training that minimizes the distance to a ground truth motion, ESD minimizes the likelihood of generating a specific target concept. The core idea is to steer the noise prediction for a target prompt (e.g., "a person kicking") towards the prediction for a neutral (empty) prompt. This is achieved by fine-tuning the model weights to move away from the concept to be erased.
+ESD operates by steering the model's predictions away from a target concept during the diffusion process. Instead of standard training that guides the model *towards* a ground truth, ESD fine-tunes the model to minimize the probability of generating a specific, unwanted motion.
 
-The loss function guides the noise prediction for the target prompt, c_target, towards a modified unconditional prediction. This process uses the model's own knowledge to steer the diffusion process away from the undesired concept.
+The core mechanism involves guiding the noise prediction for a "forget" prompt (e.g., "a person kicking") to align more closely with the prediction for a neutral or unconditional prompt. This is achieved through a specialized loss function that effectively teaches the model to suppress the target concept, leveraging the model's own internal knowledge to guide the erasure process.
 
 ## 🚀 Usage
 
 ### 1. Training (Unlearning)
 
-To erase a concept from a pre-trained model, run the training script. This script is optimized for modern GPUs and uses **Rich** for enhanced logging.
+To erase a motion concept from a pre-trained model, run the training script below. The script is optimized for modern GPUs and uses the **Rich** library for clear, detailed logging.
 
 ```bash
 python unlearning/esd/train.py \
-  --forget_split_file "kw_splits/train_val-w-kick.txt"  \
-  --preserve_split_file "kw_splits/train_val-wo-kick.txt"
+  --forget_file "kw_splits/train_val-w-kick.txt"  \
+  --preserve_file "kw_splits/train_val-wo-kick.txt"
 ```
 
 ### 2. Key Arguments
 
 | Argument | Description |
 | :--- | :--- |
-| `--name` | The name of the original pre-trained model directory. |
-| `--dataset_name` | The dataset the model was trained on (e.g., `t2m`). |
-| `--forget_split_file` | Path to a file containing the names of motions to be forgotten. |
-| `--preserve_split_file`| Path to a file containing the names of motions to be preserved. |
-| `--unlearn_epochs` | The number of epochs for the unlearning process. Typically, 500-1000 iterations are sufficient. |
-| `--unlearn_lr` | The learning rate for unlearning. A low learning rate (e.g., 1e-5 to 2e-5) is crucial to avoid damaging the model's general knowledge. |
-| `--preservation_weight` | A weight to balance the preservation of other concepts while erasing the target one. |
-| `--batch_size` | The training batch size. Adjust this based on your available GPU VRAM. |
-| `--num_workers` | The number of CPU workers for data loading. Adjust based on your CPU cores. |
+| `--name` | Name of the original pre-trained model directory. |
+| `--dataset_name` | The dataset used for training (e.g., `t2m`). |
+| `--forget_split_file` | Path to a file listing motions to be forgotten. |
+| `--preserve_split_file`| Path to a file listing motions to be preserved. |
+| `--unlearn_epochs` | Number of unlearning epochs. Typically, 500-1000 iterations are sufficient. |
+| `--unlearn_lr` | Learning rate for unlearning. A low value (e.g., 1e-5) is crucial to avoid catastrophic forgetting. |
+| `--preservation_weight` | Balances concept erasure with knowledge preservation. |
+| `--batch_size` | Training batch size, adjust based on available VRAM. |
+| `--num_workers` | Number of CPU workers for data loading. |
 
 ## 📂 Output
 
-The script creates a new experiment folder, preserving your original model weights.
+The script generates a new experiment folder, ensuring your original model weights are preserved.
 
 **Directory Structure:**
 ```
 checkpoints/t2m/
 └── {ORIGINAL_NAME}_ESD_{TARGET_CONCEPT}/  <-- New Folder
-    ├── eval_efficacy/      <-- Folder for evaluation results on forget set
-    ├── eval_preservation/  <-- Folder for evaluation results on retain set
-    |
+    ├── eval_efficacy/      <-- Evaluation results on the forget set
+    ├── eval_preservation/  <-- Evaluation results on the retain set
     ├── logs/
     │   └── train.log       <-- Full training logs
-    |
     ├── model/
-    │   └── latest.tar      <-- Unlearned weights from the last epoch
+    │   └── latest.tar      <-- Unlearned model weights
     └── opt.txt
 ```
 
 ## ⏭️ Next Steps: Comprehensive Evaluation
 
-A structured evaluation is necessary to ensure the unlearning process was successful. This involves verifying three key aspects:
-1.  **Efficacy:** Did the model successfully forget the target concept?
-2.  **Preservation:** Does the model still perform well on other, unrelated concepts?
+A rigorous evaluation is essential to confirm successful unlearning. This process validates two critical outcomes:
+1.  **Efficacy:** The model has successfully forgotten the target concept.
+2.  **Preservation:** The model's performance on other, unrelated concepts remains intact.
 
-Our comprehensive evaluation script (`unlearning/test_unlearn.py`) automates this by comparing the original and unlearned models.
+Our unified evaluation script (`unlearning/test_unlearn.py`) automates this by comparing the performance of the original and unlearned models.
 
-### Step 1: Evaluate the ORIGINAL Model (Establish a Baseline)
+### Step 1: Establish a Baseline (Evaluate Original Model)
 
-First, evaluate your original, pre-trained model to establish a baseline performance.
+First, benchmark the performance of your original, pre-trained model.
 
 ```bash
 python unlearning/test_unlearn.py  \
@@ -72,9 +72,9 @@ python unlearning/test_unlearn.py  \
   --retain_test_file "kw_splits/test-wo-kick.txt"
 ```
 
-### Step 2: Evaluate the UNLEARNED Model
+### Step 2: Evaluate the Unlearned Model
 
-Next, run the same evaluation, but point it to the new model folder and the unlearned checkpoint (`latest.tar` or a specific epoch's weights).
+Next, run the same evaluation, pointing to the new model folder and the unlearned checkpoint.
 
 ```bash
 python unlearning/test_unlearn.py  \
@@ -85,9 +85,10 @@ python unlearning/test_unlearn.py  \
 
 ### Step 3: Interpret the Results
 
-Compare the results from both evaluations. A successful unlearning experiment should demonstrate:
-*   ✅ **Efficacy:** An high FID on the forget set means that the model correctly forgot about the concept.
-*   ✅ **Preservation:** A low FID on the retain set means that the model has not been damaged by the unlearning procedure.
+A successful unlearning experiment is characterized by:
+*   ✅ **High FID (Efficacy):** A high FID score on the "forget" set indicates the model can no longer generate the target motion effectively.
+*   ✅ **Low FID (Preservation):** A low FID score on the "retain" set confirms that the model's general motion generation quality has not been compromised.
 
 ## 📚 References
-Based on the paper: **"Erasing Concepts from Diffusion Models"** (Gandikota et al., 2023).
+This implementation is based on the foundational paper:
+*   **Gandikota, R., Materzyńska, J., Fiotto-Kaufman, J., & Bau, D. (2023). "Erasing Concepts from Diffusion Models". In *Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)*.**
