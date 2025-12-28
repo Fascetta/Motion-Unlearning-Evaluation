@@ -1,49 +1,42 @@
 # Erasing Stable Diffusion (ESD) for Motion
 
-This module implements **ESD (Erasing Stable Diffusion)** adapted for 3D Motion Generation.
-ESD is a fine-tuning technique that modifies the model weights to "forget" a specific concept by guiding the model's predictions away from the target concept and towards a neutral or unconditional prediction.
+This project implements **ESD (Erasing Stable Diffusion)**, a fine-tuning technique adapted for 3D Motion Generation. ESD modifies a pre-trained model to "forget" a specific concept by guiding its predictions away from the target concept and towards a neutral or unconditional output. This is particularly useful for removing undesirable or copyrighted motions from a generative model without having to retrain it from scratch.
 
 ## 🧠 How it Works
-Unlike standard training which minimizes the distance to a ground truth motion, ESD minimizes the likelihood of generating the specific target concept.
 
-The loss function steers the noise prediction $\epsilon_\theta$ for the target prompt $c_{target}$ (e.g., "Kick") towards the neutral prediction (empty prompt $\emptyset$).
+Unlike standard training that minimizes the distance to a ground truth motion, ESD minimizes the likelihood of generating a specific target concept. The core idea is to steer the noise prediction for a target prompt (e.g., "a person kicking") towards the prediction for a neutral (empty) prompt. This is achieved by fine-tuning the model weights to move away from the concept to be erased.
 
-$$ \mathcal{L}_{ESD} = || \epsilon_\theta(x_t, c_{target}) - \underbrace{[\epsilon_\theta(x_t, \emptyset) - \eta (\epsilon_\theta(x_t, c_{target}) - \epsilon_\theta(x_t, \emptyset))]}_{\text{Guided Target}} ||^2 $$
-
-Where:
-- $c_{target}$: The text prompt to erase (e.g., "kick").
-- $\emptyset$: The null/empty prompt.
-- $\eta$: **Negative Guidance** scale (controlled by `--negative_guidance`).
+The loss function guides the noise prediction for the target prompt, c_target, towards a modified unconditional prediction. This process uses the model's own knowledge to steer the diffusion process away from the undesired concept.
 
 ## 🚀 Usage
 
 ### 1. Training (Unlearning)
-Run the training script to erase a concept from a pre-trained model. The script is optimized for modern GPUs and uses **Rich** for better logging.
+
+To erase a concept from a pre-trained model, run the training script. This script is optimized for modern GPUs and uses **Rich** for enhanced logging.
 
 ```bash
 python unlearning/esd/train.py \
-  --name t2m_denoiser_vpred_vaegelu \
-  --dataset_name t2m \
-  --target_concept "a person kicking" \
-  --negative_guidance 1.5 \
-  --unlearn_epochs 10 \
-  --unlearn_lr 1e-5 \
-  --batch_size 128 \
-  --num_workers 8
+  --forget_split_file "kw_splits/train_val-w-kick.txt"  \
+  --preserve_split_file "kw_splits/train_val-wo-kick.txt"
 ```
 
 ### 2. Key Arguments
-| Argument | Default | Description |
-| :--- | :--- | :--- |
-| `--target_concept` | "kick" | The text description of the motion to remove. |
-| `--negative_guidance`| `1.0` | Strength of erasure. `1.0` moves the concept to neutral. `>1.0` actively pushes it away. `1.5` to `2.5` often works well. |
-| `--unlearn_lr` | `1e-5` | Learning rate. ESD requires a low LR (`1e-5` to `2e-5`) to avoid destroying general knowledge. |
-| `--unlearn_epochs` | `10` | How long to train. Usually 500-1000 iterations (approx 1-3 epochs on HumanML3D) are enough. |
-| `--batch_size` | `128` | Training batch size. Adjust based on your GPU VRAM. |
-| `--num_workers` | `8` | Number of CPU workers for data loading. Adjust based on your CPU cores. |
+
+| Argument | Description |
+| :--- | :--- |
+| `--name` | The name of the original pre-trained model directory. |
+| `--dataset_name` | The dataset the model was trained on (e.g., `t2m`). |
+| `--forget_split_file` | Path to a file containing the names of motions to be forgotten. |
+| `--preserve_split_file`| Path to a file containing the names of motions to be preserved. |
+| `--unlearn_epochs` | The number of epochs for the unlearning process. Typically, 500-1000 iterations are sufficient. |
+| `--unlearn_lr` | The learning rate for unlearning. A low learning rate (e.g., 1e-5 to 2e-5) is crucial to avoid damaging the model's general knowledge. |
+| `--preservation_weight` | A weight to balance the preservation of other concepts while erasing the target one. |
+| `--batch_size` | The training batch size. Adjust this based on your available GPU VRAM. |
+| `--num_workers` | The number of CPU workers for data loading. Adjust based on your CPU cores. |
 
 ## 📂 Output
-The script creates a new experiment folder to preserve your original weights.
+
+The script creates a new experiment folder, preserving your original model weights.
 
 **Directory Structure:**
 ```
@@ -59,61 +52,41 @@ checkpoints/t2m/
 
 ## ⏭️ Next Steps: Comprehensive Evaluation
 
-Evaluating unlearning requires a structured approach. We need to verify three things:
-1.  **Efficacy:** Did the model forget the target concept?
-2.  **Preservation:** Does the model still work well for other concepts?
-3.  **Specificity:** Did the model accidentally forget related concepts?
+A structured evaluation is necessary to ensure the unlearning process was successful. This involves verifying three key aspects:
+1.  **Efficacy:** Did the model successfully forget the target concept?
+2.  **Preservation:** Does the model still perform well on other, unrelated concepts?
+3.  **Specificity:** Did the model inadvertently forget related concepts?
 
-Our comprehensive evaluation script (`unlearning/esd/evaluate.py`) automates this by comparing the original model to the unlearned one.
+Our comprehensive evaluation script (`unlearning/esd/evaluate.py`) automates this by comparing the original and unlearned models.
 
 ### Step 1: Evaluate the ORIGINAL Model (Establish a Baseline)
 
-First, run the evaluation on your original, pre-trained model to see how it performs before unlearning.
+First, evaluate your original, pre-trained model to establish a baseline performance.
 
 ```bash
-python unlearning/esd/evaluate.py \
-  --name "t2m_denoiser_vpred_vaegelu" \
-  --ckpt "net_best_fid.tar" \
-  --target_concept "a person kicking" \
-  --related_concepts "a person jumping" "a person punching" "a person lunging"
+python test_unlearn.py  \
+  --name "t2m_denoiser_vpred_vaegelu"  
+  --forget_test_file "kw_splits/test-w-kick.txt"  \
+  --retain_test_file "kw_splits/test-wo-kick.txt"
 ```
 
 ### Step 2: Evaluate the UNLEARNED Model
 
-Now, run the same evaluation, but point it to the new model folder and the unlearned checkpoint (`latest.tar` or a specific epoch like `net_e_10.tar`).
+Next, run the same evaluation, but point it to the new model folder and the unlearned checkpoint (`latest.tar` or a specific epoch's weights).
 
 ```bash
-python unlearning/esd/evaluate.py \
-  --name "t2m_denoiser_vpred_vaegelu_ESD_a_person_kicking" \
-  --ckpt "latest.tar" \
-  --target_concept "a person kicking" \
-  --related_concepts "a person jumping" "a person punching" "a person lunging"
+python test_unlearn.py  \
+  --name "t2m_denoiser_vpred_vaegelu_ESD_kick"  
+  --forget_test_file "kw_splits/test-w-kick.txt"  \
+  --retain_test_file "kw_splits/test-wo-kick.txt"
 ```
 
 ### Step 3: Interpret the Results
 
-Compare the output from Step 1 and Step 2. A successful unlearning experiment will show:
-*   ✅ **Efficacy:** The **Matching Score** for the `--target_concept` ("a person kicking") is **much lower** on the unlearned model. The generated videos should no longer show kicking.
+Compare the results from both evaluations. A successful unlearning experiment should demonstrate:
+*   ✅ **Efficacy:** The **Matching Score** for the `--target_concept` is significantly **lower** for the unlearned model.
 *   ✅ **Preservation:** The **General FID**, **R-Precision**, and **Matching Score** on the standard test set are **very close** to the original model's scores.
-*   ✅ **Specificity:** The **Matching Scores** for the `--related_concepts` ("jumping", "punching") have **not decreased significantly**.
+*   ✅ **Specificity:** The **Matching Scores** for the `--related_concepts` have **not decreased significantly**.
 
 ## 📚 References
 Based on the paper: **"Erasing Concepts from Diffusion Models"** (Gandikota et al., 2023).
-
-
-
-
-
-
-
-
-
-python unlearning/esd/train.py \
-  --name t2m_denoiser_vpred_vaegelu \
-  --target_concept "kick" \
-  --forget_split_file "kw_splits/train_val-w-kick" \
-  --preserve_split_file "train" \
-  --unlearn_epochs 3 \
-  --unlearn_lr 1e-5 \
-  --negative_guidance 7.0 \
-  --preservation_weight 0.1

@@ -5,11 +5,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class LoRALinear(nn.Module):
     """
     Wraps a standard nn.Linear layer with Low-Rank Adapters.
     Formula: h = Wx + (BA)x * scale
     """
+
     def __init__(self, original_linear, rank=4, alpha=1.0):
         super().__init__()
         self.in_features = original_linear.in_features
@@ -28,7 +30,7 @@ class LoRALinear(nn.Module):
         # B: [Out, Rank] (Zero Init)
         self.lora_a = nn.Parameter(torch.zeros(rank, self.in_features))
         self.lora_b = nn.Parameter(torch.zeros(self.out_features, rank))
-        
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -40,11 +42,12 @@ class LoRALinear(nn.Module):
     def forward(self, x):
         # Original output
         out_orig = self.original_linear(x)
-        
+
         # LoRA path: (x @ A.T) @ B.T
         out_lora = (x @ self.lora_a.t()) @ self.lora_b.t()
-        
+
         return out_orig + (out_lora * self.scaling)
+
 
 def inject_lora(model, rank=4, alpha=1.0):
     """
@@ -52,13 +55,18 @@ def inject_lora(model, rank=4, alpha=1.0):
     Linear projections (Wq, Wk, Wv, Wo) with LoRALinear.
     """
     logger.info("💉 Injecting LoRA (Rank=%d, Alpha=%.1f)...", rank, alpha)
-    
+
     params_before = sum(p.numel() for p in model.parameters())
-    
+
     count = 0
     # We look for the MultiheadAttention class by checking attributes
     for name, module in model.named_modules():
-        if hasattr(module, 'Wq') and hasattr(module, 'Wk') and hasattr(module, 'Wv') and isinstance(module.Wq, nn.Linear):
+        if (
+            hasattr(module, "Wq")
+            and hasattr(module, "Wk")
+            and hasattr(module, "Wv")
+            and isinstance(module.Wq, nn.Linear)
+        ):
             # Replace Projections
             module.Wq = LoRALinear(module.Wq, rank, alpha)
             module.Wk = LoRALinear(module.Wk, rank, alpha)
@@ -73,5 +81,5 @@ def inject_lora(model, rank=4, alpha=1.0):
     logger.info("✅ Injected LoRA into %d attention modules.", count)
     logger.info("   Original Params: %s", f"{params_before:,}")
     logger.info("   Trainable Params Now: %s (%.2f%%)", f"{trainable_after:,}", ratio)
-    
+
     return model
